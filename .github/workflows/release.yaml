@@ -1,0 +1,64 @@
+name: Build Android APKs
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    #    strategy:
+    #      matrix:
+    #        abi:
+    #          - armeabi-v7a
+    #          - arm64-v8a
+    #          - x86
+    #          - x86_64
+    env:
+      APP_NAME: bitchat-android
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin' # See 'Supported distributions' for available options
+          java-version: '21'
+
+      - name: Set versionName from release tag
+        run: echo "VERSION_NAME=${GITHUB_REF##*/}" >> $GITHUB_ENV
+
+      - name: Decode Keystore
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY }}
+        run: |
+          echo $SIGNING_KEY_BASE64 | base64 --decode > $HOME/release.jks
+          chmod 600 $HOME/release.jks
+
+      - name: Build APK
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ vars.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease \
+            -PversionName=${{ env.VERSION_NAME }} \
+            -PversionCode=${{ github.run_id }} \
+            -Pandroid.injected.signing.store.file=$HOME/release.jks \
+            -Pandroid.injected.signing.store.password=$RELEASE_KEYSTORE_PASSWORD \
+            -Pandroid.injected.signing.key.password=$RELEASE_KEY_PASSWORD \
+            -Pandroid.injected.signing.key.alias=$RELEASE_KEY_ALIAS
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app.apk
+          path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload Release Asset
+        if: github.event_name == 'release' && github.event.action == 'published'
+        run: gh release upload "${{ github.event.release.tag_name }}" app/build/outputs/apk/release/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
