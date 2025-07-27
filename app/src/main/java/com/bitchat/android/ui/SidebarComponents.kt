@@ -1,23 +1,26 @@
 package com.bitchat.android.ui
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import com.bitchat.android.R
+import android.util.Log
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
+import androidx.compose.ui.unit.sp
+
 
 /**
  * Sidebar components for ChatScreen
@@ -36,6 +39,7 @@ fun SidebarOverlay(
     val currentChannel by viewModel.currentChannel.observeAsState()
     val selectedPrivatePeer by viewModel.selectedPrivateChatPeer.observeAsState()
     val nickname by viewModel.nickname.observeAsState("")
+    val unreadChannelMessages by viewModel.unreadChannelMessages.observeAsState(emptyMap())
     
     // Get peer data from mesh service
     val peerNicknames = viewModel.meshService.getPeerNicknames()
@@ -69,8 +73,8 @@ fun SidebarOverlay(
                     .windowInsetsPadding(WindowInsets.statusBars) // Add status bar padding
             ) {
                 SidebarHeader()
-                
-                Divider()
+
+                HorizontalDivider()
                 
                 // Scrollable content
                 LazyColumn(
@@ -91,12 +95,13 @@ fun SidebarOverlay(
                                 },
                                 onLeaveChannel = { channel ->
                                     viewModel.leaveChannel(channel)
-                                }
+                                },
+                                unreadChannelMessages = unreadChannelMessages
                             )
                         }
                         
                         item {
-                            Divider(modifier = Modifier.padding(vertical = 4.dp))
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         }
                     }
                     
@@ -135,7 +140,7 @@ private fun SidebarHeader() {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "YOUR NETWORK",
+            text = stringResource(id = R.string.your_network).uppercase(),
             style = MaterialTheme.typography.titleMedium.copy(
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
@@ -152,7 +157,8 @@ fun ChannelsSection(
     currentChannel: String?,
     colorScheme: ColorScheme,
     onChannelClick: (String) -> Unit,
-    onLeaveChannel: (String) -> Unit
+    onLeaveChannel: (String) -> Unit,
+    unreadChannelMessages: Map<String, Int> = emptyMap()
 ) {
     Column {
         Row(
@@ -169,7 +175,7 @@ fun ChannelsSection(
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = "CHANNELS",
+                text = stringResource(id = R.string.channels).uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = colorScheme.onSurface.copy(alpha = 0.6f),
                 fontWeight = FontWeight.Bold
@@ -178,6 +184,7 @@ fun ChannelsSection(
         
         channels.forEach { channel ->
             val isSelected = channel == currentChannel
+            val unreadCount = unreadChannelMessages[channel] ?: 0
             
             Row(
                 modifier = Modifier
@@ -190,8 +197,15 @@ fun ChannelsSection(
                     .padding(horizontal = 24.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Unread badge for channels
+                UnreadBadge(
+                    count = unreadCount,
+                    colorScheme = colorScheme,
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                
                 Text(
-                    text = "#$channel",
+                    text = channel, // Channel already contains the # prefix
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (isSelected) colorScheme.primary else colorScheme.onSurface,
                     fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
@@ -241,7 +255,7 @@ fun PeopleSection(
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = "PEOPLE",
+                text = stringResource(id = R.string.people).uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = colorScheme.onSurface.copy(alpha = 0.6f),
                 fontWeight = FontWeight.Bold
@@ -250,38 +264,57 @@ fun PeopleSection(
         
         if (connectedPeers.isEmpty()) {
             Text(
-                text = "No one connected",
+                text = stringResource(id = R.string.no_one_connected),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colorScheme.onSurface.copy(alpha = 0.5f),
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
             )
         } else {
-            // Sort peers: favorites first, then by nickname
-            val sortedPeers = connectedPeers.sortedWith { peer1, peer2 ->
-                val isFav1 = viewModel.isFavorite(peer1)
-                val isFav2 = viewModel.isFavorite(peer2)
-                
-                when {
-                    isFav1 && !isFav2 -> -1
-                    !isFav1 && isFav2 -> 1
-                    else -> {
-                        val name1 = if (peer1 == nickname) "You" else (peerNicknames[peer1] ?: peer1)
-                        val name2 = if (peer2 == nickname) "You" else (peerNicknames[peer2] ?: peer2)
-                        name1.compareTo(name2, ignoreCase = true)
-                    }
+            // Observe reactive state for favorites and fingerprints
+            val hasUnreadPrivateMessages by viewModel.unreadPrivateMessages.observeAsState(emptySet())
+            val privateChats by viewModel.privateChats.observeAsState(emptyMap())
+            val favoritePeers by viewModel.favoritePeers.observeAsState(emptySet())
+            val peerFingerprints by viewModel.peerFingerprints.observeAsState(emptyMap())
+            
+            // Reactive favorite computation for all peers
+            val peerFavoriteStates = remember(favoritePeers, peerFingerprints, connectedPeers) {
+                connectedPeers.associateWith { peerID ->
+                    // Reactive favorite computation - same as ChatHeader
+                    val fingerprint = peerFingerprints[peerID]
+                    fingerprint != null && favoritePeers.contains(fingerprint)
                 }
             }
             
+            Log.d("SidebarComponents", "Recomposing with ${favoritePeers.size} favorites, peer states: $peerFavoriteStates")
+ 
+            // Smart sorting: unread DMs first, then by most recent DM, then favorites, then alphabetical
+            val sortedPeers = connectedPeers.sortedWith(
+                compareBy<String> { !hasUnreadPrivateMessages.contains(it) } // Unread DM senders first
+                .thenByDescending { privateChats[it]?.maxByOrNull { msg -> msg.timestamp }?.timestamp?.time ?: 0L } // Most recent DM (convert Date to Long)
+                .thenBy { !(peerFavoriteStates[it] ?: false) } // Favorites first
+                .thenBy { (if (it == nickname) "You" else (peerNicknames[it] ?: it)).lowercase() } // Alphabetical
+            )
+            
             sortedPeers.forEach { peerID ->
+                val isFavorite = peerFavoriteStates[peerID] ?: false
+                
                 PeerItem(
                     peerID = peerID,
                     displayName = if (peerID == nickname) "You" else (peerNicknames[peerID] ?: peerID),
-                    signalStrength = peerRSSI[peerID] ?: 0,
+                    signalStrength = convertRSSIToSignalStrength(peerRSSI[peerID]),
                     isSelected = peerID == selectedPrivatePeer,
-                    isFavorite = viewModel.isFavorite(peerID),
+                    isFavorite = isFavorite,
+                    hasUnreadDM = hasUnreadPrivateMessages.contains(peerID),
                     colorScheme = colorScheme,
                     onItemClick = { onPrivateChatStart(peerID) },
-                    onToggleFavorite = { viewModel.toggleFavorite(peerID) }
+                    onToggleFavorite = { 
+                        Log.d("SidebarComponents", "Sidebar toggle favorite: peerID=$peerID, currentFavorite=$isFavorite")
+                        viewModel.toggleFavorite(peerID) 
+                    },
+                    unreadCount = privateChats[peerID]?.count { msg -> 
+                        // Count unread messages from this peer (messages not from the current user)
+                        msg.sender != nickname && hasUnreadPrivateMessages.contains(peerID)
+                    } ?: if (hasUnreadPrivateMessages.contains(peerID)) 1 else 0
                 )
             }
         }
@@ -295,9 +328,11 @@ private fun PeerItem(
     signalStrength: Int,
     isSelected: Boolean,
     isFavorite: Boolean,
+    hasUnreadDM: Boolean,
     colorScheme: ColorScheme,
     onItemClick: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    unreadCount: Int = 0
 ) {
     Row(
         modifier = Modifier
@@ -310,11 +345,19 @@ private fun PeerItem(
             .padding(horizontal = 24.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Signal strength indicators
-        SignalStrengthIndicator(
-            signalStrength = signalStrength,
-            colorScheme = colorScheme
-        )
+        // Show unread badge or signal strength
+        if (hasUnreadDM) {
+            UnreadBadge(
+                count = unreadCount,
+                colorScheme = colorScheme
+            )
+        } else {
+            // Signal strength indicators
+            SignalStrengthIndicator(
+                signalStrength = signalStrength,
+                colorScheme = colorScheme
+            )
+        }
         
         Spacer(modifier = Modifier.width(8.dp))
         
@@ -326,16 +369,16 @@ private fun PeerItem(
             modifier = Modifier.weight(1f)
         )
         
-        // Favorite star
+        // Favorite star with proper filled/outlined states
         IconButton(
             onClick = onToggleFavorite,
             modifier = Modifier.size(24.dp)
         ) {
             Icon(
-                imageVector = Icons.Default.Star,
+                imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
                 contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
                 modifier = Modifier.size(16.dp),
-                tint = if (isFavorite) colorScheme.primary else colorScheme.onSurface.copy(alpha = 0.3f)
+                tint = if (isFavorite) Color(0xFFFFD700) else Color(0x87878700)
             )
         }
     }
@@ -362,5 +405,59 @@ private fun SignalStrengthIndicator(
             )
             if (index < 2) Spacer(modifier = Modifier.width(2.dp))
         }
+    }
+}
+
+/**
+ * Reusable unread badge component for both channels and private messages
+ */
+@Composable
+private fun UnreadBadge(
+    count: Int,
+    colorScheme: ColorScheme,
+    modifier: Modifier = Modifier
+) {
+    if (count > 0) {
+        Box(
+            modifier = modifier
+                .background(
+                    color = Color(0xFFFFD700), // Yellow color
+                    shape = RoundedCornerShape(10.dp)
+                )
+                .padding(horizontal = 2.dp, vertical = 0.dp)
+                .defaultMinSize(minWidth = 14.dp, minHeight = 14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (count > 99) "99+" else count.toString(),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                color = Color.Black // Black text on yellow background
+            )
+        }
+    }
+}
+
+/**
+ * Convert RSSI value (dBm) to signal strength percentage (0-100)
+ * RSSI typically ranges from -30 (excellent) to -100 (very poor)
+ * Maps to 0-100 scale where:
+ * - 0-32: No signal (0 bars)
+ * - 33-65: Weak (1 bar) 
+ * - 66-98: Good (2 bars)
+ * - 99-100: Excellent (3 bars)
+ */
+private fun convertRSSIToSignalStrength(rssi: Int?): Int {
+    if (rssi == null) return 0
+    
+    return when {
+        rssi >= -40 -> 100  // Excellent signal
+        rssi >= -55 -> 85   // Very good signal  
+        rssi >= -70 -> 70   // Good signal
+        rssi >= -85 -> 50   // Fair signal
+        rssi >= -100 -> 25  // Poor signal
+        else -> 0           // Very poor or no signal
     }
 }

@@ -13,7 +13,7 @@ This is the **Android port** of the original [bitchat iOS app](https://github.co
 
 ## Install bitchat
 
-You can download the latest version of bitchat for Android from the [GitHub Releases page](https://github.com/callebtc/bitchat-android/releases).
+You can download the latest version of bitchat for Android from the [GitHub Releases page](https://github.com/permissionlesstech/bitchat-android/releases).
 
 **Instructions:**
 
@@ -23,7 +23,7 @@ You can download the latest version of bitchat for Android from the [GitHub Rele
 
 ## License
 
-This project is released into the public domain. See the [LICENSE](LICENSE) file for details.
+This project is released into the public domain. See the [LICENSE](LICENSE.md) file for details.
 
 ## Features
 
@@ -53,7 +53,7 @@ This project is released into the public domain. See the [LICENSE](LICENSE) file
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/bitchat-android.git
+   git clone https://github.com/permissionlesstech/bitchat-android.git
    cd bitchat-android
    ```
 
@@ -231,7 +231,7 @@ bitchat uses an efficient binary protocol optimized for Bluetooth LE:
 
 The Android implementation maintains 100% binary protocol compatibility with iOS:
 - **Header Format**: Identical 13-byte header structure
-- **Packet Types**: Same message types and routing logic  
+- **Packet Types**: Same message types and routing logic
 - **Encryption**: Identical cryptographic algorithms and key exchange
 - **UUIDs**: Same Bluetooth service and characteristic identifiers
 - **Fragmentation**: Compatible message fragmentation for large content
@@ -288,7 +288,7 @@ This Android port enables seamless communication with the original iOS bitchat a
 Contributions are welcome! Key areas for enhancement:
 
 1. **Performance**: Battery optimization and connection reliability
-2. **UI/UX**: Additional Material Design 3 features  
+2. **UI/UX**: Additional Material Design 3 features
 3. **Security**: Enhanced cryptographic features
 4. **Testing**: Unit and integration test coverage
 5. **Documentation**: API documentation and development guides
@@ -296,7 +296,7 @@ Contributions are welcome! Key areas for enhancement:
 ## Support & Issues
 
 - **Bug Reports**: [Create an issue](../../issues) with device info and logs
-- **Feature Requests**: [Start a discussion](../../discussions) 
+- **Feature Requests**: [Start a discussion](../../discussions)
 - **Security Issues**: Email security concerns privately
 - **iOS Compatibility**: Cross-reference with [original iOS repo](https://github.com/jackjackbits/bitchat)
 

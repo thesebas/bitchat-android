@@ -1,5 +1,6 @@
 package com.bitchat.android.ui
 
+import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MediatorLiveData
 import androidx.lifecycle.MutableLiveData
@@ -78,6 +79,24 @@ class ChatState {
     private val _commandSuggestions = MutableLiveData<List<CommandSuggestion>>(emptyList())
     val commandSuggestions: LiveData<List<CommandSuggestion>> = _commandSuggestions
     
+    // Favorites
+    private val _favoritePeers = MutableLiveData<Set<String>>(emptySet())
+    val favoritePeers: LiveData<Set<String>> = _favoritePeers
+    
+    // Noise session states for peers (for reactive UI updates)
+    private val _peerSessionStates = MutableLiveData<Map<String, String>>(emptyMap())
+    val peerSessionStates: LiveData<Map<String, String>> = _peerSessionStates
+    
+    // Peer fingerprint state for reactive favorites (for reactive UI updates)
+    private val _peerFingerprints = MutableLiveData<Map<String, String>>(emptyMap())
+    val peerFingerprints: LiveData<Map<String, String>> = _peerFingerprints
+    
+    // peerIDToPublicKeyFingerprint REMOVED - fingerprints now handled centrally in PeerManager
+    
+    // Navigation state
+    private val _showAppInfo = MutableLiveData<Boolean>(false)
+    val showAppInfo: LiveData<Boolean> = _showAppInfo
+    
     // Unread state computed properties
     val hasUnreadChannels: MediatorLiveData<Boolean> = MediatorLiveData<Boolean>()
     val hasUnreadPrivateMessages: MediatorLiveData<Boolean> = MediatorLiveData<Boolean>()
@@ -110,6 +129,10 @@ class ChatState {
     fun getShowSidebarValue() = _showSidebar.value ?: false
     fun getShowCommandSuggestionsValue() = _showCommandSuggestions.value ?: false
     fun getCommandSuggestionsValue() = _commandSuggestions.value ?: emptyList()
+    fun getFavoritePeersValue() = _favoritePeers.value ?: emptySet()
+    fun getPeerSessionStatesValue() = _peerSessionStates.value ?: emptyMap()
+    fun getPeerFingerprintsValue() = _peerFingerprints.value ?: emptyMap()
+    fun getShowAppInfoValue() = _showAppInfo.value ?: false
     
     // Setters for state updates
     fun setMessages(messages: List<BitchatMessage>) {
@@ -179,4 +202,31 @@ class ChatState {
     fun setCommandSuggestions(suggestions: List<CommandSuggestion>) {
         _commandSuggestions.value = suggestions
     }
+
+    fun setFavoritePeers(favorites: Set<String>) {
+        val currentValue = _favoritePeers.value ?: emptySet()
+        Log.d("ChatState", "setFavoritePeers called with ${favorites.size} favorites: $favorites")
+        Log.d("ChatState", "Current value: $currentValue")
+        Log.d("ChatState", "Values equal: ${currentValue == favorites}")
+        Log.d("ChatState", "Setting on thread: ${Thread.currentThread().name}")
+        
+        // Always set the value - even if equal, this ensures observers are triggered
+        _favoritePeers.value = favorites
+        
+        Log.d("ChatState", "LiveData value after set: ${_favoritePeers.value}")
+        Log.d("ChatState", "LiveData has active observers: ${_favoritePeers.hasActiveObservers()}")
+    }
+    
+    fun setPeerSessionStates(states: Map<String, String>) {
+        _peerSessionStates.value = states
+    }
+    
+    fun setPeerFingerprints(fingerprints: Map<String, String>) {
+        _peerFingerprints.value = fingerprints
+    }
+    
+    fun setShowAppInfo(show: Boolean) {
+        _showAppInfo.value = show
+    }
+
 }

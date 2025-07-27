@@ -2,6 +2,7 @@ package com.bitchat.android.ui
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.viewModelScope
@@ -19,22 +20,31 @@ import kotlin.random.Random
  * Refactored ChatViewModel - Main coordinator for bitchat functionality
  * Delegates specific responsibilities to specialized managers while maintaining 100% iOS compatibility
  */
-class ChatViewModel(application: Application) : AndroidViewModel(application), BluetoothMeshDelegate {
-    
-    private val context: Context = application.applicationContext
-    
-    // Core services
-    val meshService = BluetoothMeshService(context)
-    
+class ChatViewModel(
+    application: Application,
+    val meshService: BluetoothMeshService
+) : AndroidViewModel(application), BluetoothMeshDelegate {
+
     // State management
     private val state = ChatState()
     
     // Specialized managers
-    private val dataManager = DataManager(context)
+    private val dataManager = DataManager(application.applicationContext)
     private val messageManager = MessageManager(state)
     private val channelManager = ChannelManager(state, messageManager, dataManager, viewModelScope)
-    private val privateChatManager = PrivateChatManager(state, messageManager, dataManager)
+    
+    // Create Noise session delegate for clean dependency injection
+    private val noiseSessionDelegate = object : NoiseSessionDelegate {
+        override fun hasEstablishedSession(peerID: String): Boolean = meshService.hasEstablishedSession(peerID)
+        override fun initiateHandshake(peerID: String) = meshService.initiateNoiseHandshake(peerID) 
+        override fun sendIdentityAnnouncement() = meshService.sendKeyExchangeToDevice()
+        override fun sendHandshakeRequest(targetPeerID: String, pendingCount: UByte) = meshService.sendHandshakeRequest(targetPeerID, pendingCount)
+        override fun getMyPeerID(): String = meshService.myPeerID
+    }
+    
+    val privateChatManager = PrivateChatManager(state, messageManager, dataManager, noiseSessionDelegate)
     private val commandProcessor = CommandProcessor(state, messageManager, channelManager, privateChatManager)
+    private val notificationManager = NotificationManager(application.applicationContext)
     
     // Delegate handler for mesh callbacks
     private val meshDelegateHandler = MeshDelegateHandler(
@@ -42,9 +52,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         messageManager = messageManager,
         channelManager = channelManager,
         privateChatManager = privateChatManager,
+        notificationManager = notificationManager,
         coroutineScope = viewModelScope,
-        onHapticFeedback = { ChatViewModelUtils.triggerHapticFeedback(context) },
-        getMyPeerID = { meshService.myPeerID }
+        onHapticFeedback = { ChatViewModelUtils.triggerHapticFeedback(application.applicationContext) },
+        getMyPeerID = { meshService.myPeerID },
+        getMeshService = { meshService }
     )
     
     // Expose state through LiveData (maintaining the same interface)
@@ -67,9 +79,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
     val hasUnreadPrivateMessages = state.hasUnreadPrivateMessages
     val showCommandSuggestions: LiveData<Boolean> = state.showCommandSuggestions
     val commandSuggestions: LiveData<List<CommandSuggestion>> = state.commandSuggestions
+    val favoritePeers: LiveData<Set<String>> = state.favoritePeers
+    val peerSessionStates: LiveData<Map<String, String>> = state.peerSessionStates
+    val peerFingerprints: LiveData<Map<String, String>> = state.peerFingerprints
+    val showAppInfo: LiveData<Boolean> = state.showAppInfo
     
     init {
-        meshService.delegate = this
+        // Note: Mesh service delegate is now set by MainActivity
         loadAndInitialize()
     }
     
@@ -94,18 +110,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         
         // Load other data
         dataManager.loadFavorites()
+        state.setFavoritePeers(dataManager.favoritePeers)
         dataManager.loadBlockedUsers()
         
-        // Start mesh service
-        meshService.startServices()
+        // Log all favorites at startup
+        dataManager.logAllFavorites()
+        logCurrentFavoriteState()
+        
+        // Initialize session state monitoring
+        initializeSessionStateMonitoring()
+        
+        // Note: Mesh service is now started by MainActivity
         
         // Show welcome message if no peers after delay
         viewModelScope.launch {
-            delay(3000)
+            delay(10000)
             if (state.getConnectedPeersValue().isEmpty() && state.getMessagesValue().isEmpty()) {
                 val welcomeMessage = BitchatMessage(
                     sender = "system",
-                    content = "get people around you to download bitchat…and chat with them here!",
+                    content = "get people around you to download bitchat and chat with them here!",
                     timestamp = Date(),
                     isRelay = false
                 )
@@ -116,7 +139,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
     
     override fun onCleared() {
         super.onCleared()
-        meshService.stopServices()
+        // Note: Mesh service lifecycle is now managed by MainActivity
     }
     
     // MARK: - Nickname Management
@@ -145,11 +168,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
     // MARK: - Private Chat Management (delegated)
     
     fun startPrivateChat(peerID: String) {
-        privateChatManager.startPrivateChat(peerID, meshService)
+        val success = privateChatManager.startPrivateChat(peerID, meshService)
+        if (success) {
+            // Notify notification manager about current private chat
+            setCurrentPrivateChatPeer(peerID)
+            // Clear notifications for this sender since user is now viewing the chat
+            clearNotificationsForSender(peerID)
+        }
     }
     
     fun endPrivateChat() {
         privateChatManager.endPrivateChat()
+        // Notify notification manager that no private chat is active
+        setCurrentPrivateChatPeer(null)
     }
     
     // MARK: - Message Sending
@@ -238,11 +269,48 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
     }
     
     fun toggleFavorite(peerID: String) {
+        Log.d("ChatViewModel", "toggleFavorite called for peerID: $peerID")
         privateChatManager.toggleFavorite(peerID)
+        
+        // Log current state after toggle
+        logCurrentFavoriteState()
     }
     
-    fun registerPeerPublicKey(peerID: String, publicKeyData: ByteArray) {
-        privateChatManager.registerPeerPublicKey(peerID, publicKeyData)
+    private fun logCurrentFavoriteState() {
+        Log.i("ChatViewModel", "=== CURRENT FAVORITE STATE ===")
+        Log.i("ChatViewModel", "LiveData favorite peers: ${favoritePeers.value}")
+        Log.i("ChatViewModel", "DataManager favorite peers: ${dataManager.favoritePeers}")
+        Log.i("ChatViewModel", "Peer fingerprints: ${privateChatManager.getAllPeerFingerprints()}")
+        Log.i("ChatViewModel", "==============================")
+    }
+    
+    /**
+     * Initialize session state monitoring for reactive UI updates
+     */
+    private fun initializeSessionStateMonitoring() {
+        viewModelScope.launch {
+            while (true) {
+                delay(1000) // Check session states every second
+                updateReactiveStates()
+            }
+        }
+    }
+    
+    /**
+     * Update reactive states for all connected peers (session states and fingerprints)
+     */
+    private fun updateReactiveStates() {
+        val currentPeers = state.getConnectedPeersValue()
+        
+        // Update session states
+        val sessionStates = currentPeers.associateWith { peerID ->
+            meshService.getSessionState(peerID).toString()
+        }
+        state.setPeerSessionStates(sessionStates)
+        
+        // Update fingerprint mappings from centralized manager
+        val fingerprints = privateChatManager.getAllPeerFingerprints()
+        state.setPeerFingerprints(fingerprints)
     }
     
     // MARK: - Debug and Troubleshooting
@@ -251,17 +319,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         return meshService.getDebugStatus()
     }
     
-    fun restartMeshServices() {
-        viewModelScope.launch {
-            meshService.stopServices()
-            delay(1000)
-            meshService.startServices()
-        }
-    }
+    // Note: Mesh service restart is now handled by MainActivity
+    // This function is no longer needed
     
     fun setAppBackgroundState(inBackground: Boolean) {
-        // Forward to connection manager for power optimization
-        meshService.connectionManager.setAppBackgroundState(inBackground)
+        // Forward to notification manager for notification logic
+        notificationManager.setAppBackgroundState(inBackground)
+    }
+    
+    fun setCurrentPrivateChatPeer(peerID: String?) {
+        // Update notification manager with current private chat peer
+        notificationManager.setCurrentPrivateChatPeer(peerID)
+    }
+    
+    fun clearNotificationsForSender(peerID: String) {
+        // Clear notifications when user opens a chat
+        notificationManager.clearNotificationsForSender(peerID)
     }
     
     // MARK: - Command Autocomplete (delegated)
@@ -316,6 +389,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         return meshDelegateHandler.isFavorite(peerID)
     }
     
+    // registerPeerPublicKey REMOVED - fingerprints now handled centrally in PeerManager
+    
     // MARK: - Emergency Clear
     
     fun panicClearAllData() {
@@ -330,13 +405,62 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), B
         state.setNickname(newNickname)
         dataManager.saveNickname(newNickname)
         
-        // Disconnect from mesh
-        meshService.stopServices()
-        
-        // Restart services with new identity
-        viewModelScope.launch {
-            delay(500)
-            meshService.startServices()
+        // Note: Mesh service restart is now handled by MainActivity
+        // This method now only clears data, not mesh service lifecycle
+    }
+    
+    // MARK: - Navigation Management
+    
+    fun showAppInfo() {
+        state.setShowAppInfo(true)
+    }
+    
+    fun hideAppInfo() {
+        state.setShowAppInfo(false)
+    }
+    
+    fun showSidebar() {
+        state.setShowSidebar(true)
+    }
+    
+    fun hideSidebar() {
+        state.setShowSidebar(false)
+    }
+    
+    /**
+     * Handle Android back navigation
+     * Returns true if the back press was handled, false if it should be passed to the system
+     */
+    fun handleBackPressed(): Boolean {
+        return when {
+            // Close app info dialog
+            state.getShowAppInfoValue() -> {
+                hideAppInfo()
+                true
+            }
+            // Close sidebar
+            state.getShowSidebarValue() -> {
+                hideSidebar()
+                true
+            }
+            // Close password dialog
+            state.getShowPasswordPromptValue() -> {
+                state.setShowPasswordPrompt(false)
+                state.setPasswordPromptChannel(null)
+                true
+            }
+            // Exit private chat
+            state.getSelectedPrivateChatPeerValue() != null -> {
+                endPrivateChat()
+                true
+            }
+            // Exit channel view
+            state.getCurrentChannelValue() != null -> {
+                switchToChannel(null)
+                true
+            }
+            // No special navigation state - let system handle (usually exits app)
+            else -> false
         }
     }
 }
